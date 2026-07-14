@@ -1,0 +1,57 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = 'dev.zerodrop'
+version = '0.1.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(11)
+    }
+    withSourcesJar()
+    withJavadocJar()
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    api 'com.google.code.gson:gson:2.11.0'
+}
+
+javadoc {
+    options.addBooleanOption('Xdoclint:none', true)
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            from components.java
+
+            pom {
+                name = 'zerodrop-java'
+                description = 'Disposable email inboxes for testing auth flows in CI — OTPs and magic links auto-extracted.'
+                url = 'https://zerodrop.dev'
+                licenses {
+                    license {
+                        name = 'MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'zerodrop'
+                        name = 'ZeroDrop'
+                        email = 'founder@zerodrop.dev'
+                    }
+                }
+                scm {
+                    url = 'https://github.com/zerodrop-dev/zerodrop-java'
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,46 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java: ["11", "17", "21"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        run: gradle build --no-daemon
+
+      - name: Smoke test
+        run: |
+          cat > SmokeTest.java << 'JAVA'
+          import dev.zerodrop.ZeroDrop;
+          import dev.zerodrop.Filter;
+
+          public class SmokeTest {
+              public static void main(String[] args) {
+                  ZeroDrop mail = ZeroDrop.create();
+                  String inbox = mail.generateInbox();
+                  if (!inbox.matches("[a-z]+-[a-z0-9]{7}@zerodrop-sandbox\\.online")) {
+                      throw new RuntimeException("bad inbox: " + inbox);
+                  }
+                  Filter f = Filter.builder().hasOtp(true).build();
+                  System.out.println("smoke test passed: " + inbox);
+              }
+          }
+          JAVA
+          gradle jar --no-daemon
+          GSON=$(find ~/.gradle -name "gson-2.11.0.jar" | head -1)
+          javac -cp "build/libs/zerodrop-java-0.1.0.jar:$GSON" SmokeTest.java
+          java -cp "build/libs/zerodrop-java-0.1.0.jar:$GSON:." SmokeTest
