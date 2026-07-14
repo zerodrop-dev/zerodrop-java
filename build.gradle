@@ -7,11 +7,12 @@ group = 'dev.zerodrop'
 version = '0.1.0'
 
 java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(11)
-    }
     withSourcesJar()
     withJavadocJar()
+}
+
+compileJava {
+    options.release = 11
 }
 
 repositories {
