@@ -18,10 +18,17 @@ public class ZeroDropException extends RuntimeException {
         }
     }
 
-    /** Thrown when an invalid API key is provided. */
+    /**
+     * Thrown on a 401: the inbox belongs to an account's prefix and the request
+     * had no key or the wrong one. The message carries the server's reason.
+     */
     public static final class Auth extends ZeroDropException {
         Auth() {
-            super("Invalid or missing API key");
+            this(null);
+        }
+
+        Auth(String reason) {
+            super(reason != null ? reason : "Invalid or missing API key");
         }
     }
 

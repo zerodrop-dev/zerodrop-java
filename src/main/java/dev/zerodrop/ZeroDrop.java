@@ -34,6 +34,9 @@ import java.util.regex.Pattern;
  * }</pre>
  */
 public final class ZeroDrop {
+    /** The SDK version, sent in the User-Agent header. */
+    public static final String VERSION = "0.2.0";
+
     private static final String DEFAULT_BASE_URL = "https://zerodrop.dev";
     private static final String FREE_DOMAIN = "zerodrop-sandbox.online";
     private static final String[] ADJECTIVES = {
@@ -43,26 +46,71 @@ public final class ZeroDrop {
     private static final String ALPHANUM = "abcdefghijklmnopqrstuvwxyz0123456789";
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration POLL_INTERVAL = Duration.ofSeconds(2);
+    // A free key from https://zerodrop.dev/keys: zd_<prefix>_<32 letters/digits>.
+    // Inboxes named <prefix>-... can be read only with that key.
+    private static final Pattern KEY_FORMAT = Pattern.compile("^zd_([a-z0-9]{4})_[A-Za-z0-9]{32}$");
     private static final Pattern PLAIN_TEXT = Pattern.compile(
         "Content-Type: text/plain[^\\r\\n]*\\r\\n\\r\\n(.*?)(?:\\r\\n--|\\r\\n\\r\\n--)",
         Pattern.DOTALL
     );
 
     private final String apiKey;
+    private final String prefix;
     private final String baseUrl;
     private final HttpClient http;
     private final SecureRandom random = new SecureRandom();
     private final Gson gson = new Gson();
 
     private ZeroDrop(String apiKey, String baseUrl, HttpClient http) {
-        this.apiKey = apiKey;
+        String key = trimKey(apiKey);
+        if (key.isEmpty()) {
+            key = trimKey(System.getenv("ZERODROP_API_KEY"));
+        }
+        // A key goes into an HTTP header, so after trimming it may hold only
+        // visible ASCII. Anything else is refused without echoing the key.
+        if (!key.chars().allMatch(ch -> ch >= 0x21 && ch <= 0x7e)) {
+            throw new IllegalArgumentException(
+                "ZeroDrop: the API key contains a character that can't be sent in an HTTP header, "
+                    + "such as a line break or a byte-order mark. Copy it again from https://zerodrop.dev/keys.");
+        }
+        this.apiKey = key.isEmpty() ? null : key;
+        Matcher m = KEY_FORMAT.matcher(key);
+        this.prefix = this.apiKey != null && m.matches() ? m.group(1) : null;
         this.baseUrl = baseUrl.endsWith("/")
             ? baseUrl.substring(0, baseUrl.length() - 1)
             : baseUrl;
         this.http = http;
     }
 
-    /** Create a client in free sandbox mode — no signup required. */
+    // Drops whitespace around a key, including the no-break spaces and
+    // byte-order marks that copying and pasting can bring along.
+    private static String trimKey(String key) {
+        if (key == null) {
+            return "";
+        }
+        int start = 0;
+        int end = key.length();
+        while (start < end && isKeyPadding(key.charAt(start))) {
+            start++;
+        }
+        while (end > start && isKeyPadding(key.charAt(end - 1))) {
+            end--;
+        }
+        return key.substring(start, end);
+    }
+
+    private static boolean isKeyPadding(char ch) {
+        return ch <= ' ' || Character.isWhitespace(ch) || Character.isSpaceChar(ch) || ch == '\uFEFF';
+    }
+
+    /**
+     * Create a client. It uses ZERODROP_API_KEY from the environment when set;
+     * otherwise it runs in free sandbox mode, where anyone who knows an inbox's
+     * name can read it.
+     *
+     * @throws IllegalArgumentException if the key holds a character that can't
+     *     be sent in an HTTP header (a line break, a byte-order mark...)
+     */
     public static ZeroDrop create() {
         return builder().build();
     }
@@ -72,8 +120,17 @@ public final class ZeroDrop {
     }
 
     /**
+     * Your key's inbox prefix ("k7x2"), or empty without a key. Inboxes under
+     * it can be read only with that key.
+     */
+    public Optional<String> prefix() {
+        return Optional.ofNullable(prefix);
+    }
+
+    /**
      * Returns a ready-to-use email address instantly.
-     * No network request is made.
+     * No network request is made. With a key, the name starts with your
+     * prefix: k7x2-swift-x7k29ab@zerodrop-sandbox.online.
      */
     public String generateInbox() {
         String adjective = ADJECTIVES[random.nextInt(ADJECTIVES.length)];
@@ -81,7 +138,11 @@ public final class ZeroDrop {
         for (int i = 0; i < 7; i++) {
             suffix.append(ALPHANUM.charAt(random.nextInt(ALPHANUM.length())));
         }
-        return adjective + "-" + suffix + "@" + FREE_DOMAIN;
+        String name = adjective + "-" + suffix;
+        if (prefix != null) {
+            name = prefix + "-" + name;
+        }
+        return name + "@" + FREE_DOMAIN;
     }
 
     /**
@@ -94,7 +155,7 @@ public final class ZeroDrop {
     /**
      * Returns the newest email matching the filter, or empty if none match.
      *
-     * @throws ZeroDropException.Auth    on invalid API key
+     * @throws ZeroDropException.Auth    when the inbox needs another key; the message says why
      * @throws ZeroDropException.Network on transport failure
      */
     public Optional<Email> fetchLatest(String inbox, Filter filter) {
@@ -104,7 +165,7 @@ public final class ZeroDrop {
         HttpRequest.Builder req = HttpRequest.newBuilder()
             .uri(URI.create(url))
             .timeout(Duration.ofSeconds(30))
-            .header("User-Agent", "zerodrop-java/0.1.0")
+            .header("User-Agent", "zerodrop-java/" + VERSION)
             .GET();
         if (apiKey != null) {
             req.header("Authorization", "Bearer " + apiKey);
@@ -121,7 +182,7 @@ public final class ZeroDrop {
         }
 
         if (res.statusCode() == 401) {
-            throw new ZeroDropException.Auth();
+            throw new ZeroDropException.Auth(errorReason(res.body()));
         }
         if (res.statusCode() != 200) {
             throw new ZeroDropException.Network("API returned " + res.statusCode());
@@ -160,7 +221,7 @@ public final class ZeroDrop {
      * Blocks until an email matching the filter arrives.
      *
      * @throws ZeroDropException.Timeout if nothing arrives in time
-     * @throws ZeroDropException.Auth    on invalid API key
+     * @throws ZeroDropException.Auth    when the inbox needs another key; the message says why
      */
     public Email waitForLatest(String inbox, Duration timeout, Filter filter) {
         Instant deadline = Instant.now().plus(timeout);
@@ -182,6 +243,19 @@ public final class ZeroDrop {
                 throw new ZeroDropException.Timeout(inbox, timeout.toSeconds());
             }
         }
+    }
+
+    // The server explains a 401 in its JSON body; pass that on.
+    private String errorReason(String body) {
+        try {
+            JsonObject obj = gson.fromJson(body, JsonObject.class);
+            if (obj != null && obj.has("error") && obj.get("error").isJsonPrimitive()) {
+                return obj.get("error").getAsString();
+            }
+        } catch (RuntimeException ignored) {
+            // not JSON: fall back to the generic message
+        }
+        return null;
     }
 
     private Email toEmail(JsonObject raw) {
@@ -245,7 +319,10 @@ public final class ZeroDrop {
         private String baseUrl = DEFAULT_BASE_URL;
         private HttpClient http;
 
-        /** Workspace API key. Omit for free sandbox mode. */
+        /**
+         * Your API key, free from https://zerodrop.dev/keys. Without it the
+         * client reads ZERODROP_API_KEY from the environment.
+         */
         public Builder apiKey(String apiKey) {
             this.apiKey = apiKey;
             return this;
@@ -263,6 +340,12 @@ public final class ZeroDrop {
             return this;
         }
 
+        /**
+         * Builds the client.
+         *
+         * @throws IllegalArgumentException if the key holds a character that
+         *     can't be sent in an HTTP header (a line break, a byte-order mark...)
+         */
         public ZeroDrop build() {
             HttpClient client = http != null ? http : HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))

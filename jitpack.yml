@@ -1,2 +1,10 @@
+# JitPack builds the tag that `com.github.zerodrop-dev:zerodrop-java:<tag>` asks for.
+# The repo has no Gradle wrapper, so pin a Gradle that runs on JDK 17
+# (JitPack's default Gradle, 4.8.1, doesn't).
 jdk:
   - openjdk17
+before_install:
+  - sdk install gradle 8.14.3
+  - sdk use gradle 8.14.3
+install:
+  - gradle build publishToMavenLocal

@@ -27,7 +27,7 @@ repositories {
 }
 
 dependencies {
-    testImplementation 'com.github.zerodrop-dev:zerodrop-java:v0.1.0'
+    testImplementation 'com.github.zerodrop-dev:zerodrop-java:v0.2.0'
 }
 ```
 
@@ -44,7 +44,7 @@ dependencies {
 <dependency>
     <groupId>com.github.zerodrop-dev</groupId>
     <artifactId>zerodrop-java</artifactId>
-    <version>v0.1.0</version>
+    <version>v0.2.0</version>
     <scope>test</scope>
 </dependency>
 ```
@@ -164,6 +164,21 @@ driver.get(email.magicLink().orElseThrow());
 assertTrue(driver.getCurrentUrl().endsWith("/dashboard"));
 ```
 
+## Free API key (private inboxes)
+
+Without a key, anyone who knows an inbox's name can read it. With a free key, your inboxes start with your own prefix and only your key can read them.
+
+1. Sign in with GitHub at [zerodrop.dev/keys](https://zerodrop.dev/keys) and create a key.
+2. Set it as `ZERODROP_API_KEY`. `ZeroDrop.create()` reads it automatically, or you can pass `.apiKey(...)` to the builder.
+
+```java
+ZeroDrop mail = ZeroDrop.create(); // reads ZERODROP_API_KEY when it's set
+mail.generateInbox();
+// "k7x2-swift-x7k29ab@zerodrop-sandbox.online", where k7x2 is your prefix
+```
+
+Reading a `k7x2-…` inbox without your key throws `ZeroDropException.Auth` with the reason. `mail.prefix()` returns your prefix if you build an address yourself. A key holding a character that can't be sent in an HTTP header (a line break, a byte-order mark) makes `ZeroDrop.create()` and `build()` throw `IllegalArgumentException`; the message never includes the key.
+
 ## Parallel test runs
 
 `generateInbox()` runs locally — no network request, no collisions. Safe with JUnit parallel execution and TestNG parallel suites; every call returns a unique isolated inbox.
@@ -178,7 +193,7 @@ try {
 } catch (ZeroDropException.Timeout e) {
     // No email arrived — check your app is sending correctly
 } catch (ZeroDropException.Auth e) {
-    // Invalid API key
+    // The inbox belongs to another key's prefix, or your key is wrong — e.getMessage() says which
 } catch (ZeroDropException.Network e) {
     // Transport failure — message includes status page link
 }
@@ -204,9 +219,10 @@ ZeroDrop mail = ZeroDrop.builder()
 
 | Method | Description |
 |---|---|
-| `ZeroDrop.create()` | Client in free sandbox mode. |
+| `ZeroDrop.create()` | Client using `ZERODROP_API_KEY` when set; otherwise free sandbox mode, where inboxes are public to anyone who knows the name. |
 | `ZeroDrop.builder()` | Configure apiKey / baseUrl / httpClient. |
-| `generateInbox()` | Instant inbox address. No network request. |
+| `generateInbox()` | Instant inbox address. No network request. With a key, the name starts with your prefix. |
+| `prefix()` | `Optional<String>` — your key's inbox prefix (`"k7x2"`), empty without a key. |
 | `fetchLatest(inbox, filter)` | `Optional<Email>` — latest matching email. |
 | `waitForLatest(inbox, timeout, filter)` | Block until email arrives. |
 
@@ -220,6 +236,7 @@ ZeroDrop mail = ZeroDrop.builder()
 | Email filtering | ✓ | ✓ |
 | Email retention | 30 min | Extended |
 | Custom domains | ✗ | ✓ |
+| API key | ✓ free at [zerodrop.dev/keys](https://zerodrop.dev/keys) | ✓ |
 
 Get a Workspace at [zerodrop.dev](https://zerodrop.dev)
 

@@ -41,5 +41,5 @@ jobs:
           }
           JAVA
           GSON=$(find ~/.gradle -name "gson-2.11.0.jar" | head -1)
-          javac -cp "build/libs/zerodrop-java-0.1.0.jar:$GSON" SmokeTest.java
-          java -cp "build/libs/zerodrop-java-0.1.0.jar:$GSON:." SmokeTest
+          javac -cp "build/libs/zerodrop-java-0.2.0.jar:$GSON" SmokeTest.java
+          java -cp "build/libs/zerodrop-java-0.2.0.jar:$GSON:." SmokeTest
