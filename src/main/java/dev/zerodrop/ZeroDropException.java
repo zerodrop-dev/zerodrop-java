@@ -32,6 +32,20 @@ public class ZeroDropException extends RuntimeException {
         }
     }
 
+    /**
+     * Thrown when ZeroDrop held the email sent to the inbox and didn't store it:
+     * without an API key, one sender can reach only a few different inboxes a
+     * day. The message carries the server's reason.
+     */
+    public static final class Held extends ZeroDropException {
+        Held(String reason) {
+            super(reason != null && !reason.isEmpty() ? reason :
+                  "ZeroDrop held the email sent to this inbox: without an API key, one sender can " +
+                  "reach only a few different inboxes a day. Get a free key at " +
+                  "https://zerodrop.dev/keys and set ZERODROP_API_KEY.");
+        }
+    }
+
     /** Thrown on transport-level failures. */
     public static final class Network extends ZeroDropException {
         Network(String message) {

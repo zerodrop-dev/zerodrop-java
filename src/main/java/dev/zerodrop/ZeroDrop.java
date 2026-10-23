@@ -2,6 +2,7 @@ package dev.zerodrop;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.io.IOException;
@@ -35,7 +36,7 @@ import java.util.regex.Pattern;
  */
 public final class ZeroDrop {
     /** The SDK version, sent in the User-Agent header. */
-    public static final String VERSION = "0.2.0";
+    public static final String VERSION = "0.3.0";
 
     private static final String DEFAULT_BASE_URL = "https://zerodrop.dev";
     private static final String FREE_DOMAIN = "zerodrop-sandbox.online";
@@ -156,6 +157,8 @@ public final class ZeroDrop {
      * Returns the newest email matching the filter, or empty if none match.
      *
      * @throws ZeroDropException.Auth    when the inbox needs another key; the message says why
+     * @throws ZeroDropException.Held    when ZeroDrop held the email (no key, daily limit) and
+     *                                   nothing else matches; the message says why
      * @throws ZeroDropException.Network on transport failure
      */
     public Optional<Email> fetchLatest(String inbox, Filter filter) {
@@ -194,11 +197,24 @@ public final class ZeroDrop {
         }
 
         JsonArray emails = payload.getAsJsonArray("emails");
+        JsonObject notice = null;
         for (int i = 0; i < emails.size(); i++) {
-            Email email = toEmail(emails.get(i).getAsJsonObject());
+            JsonObject item = emails.get(i).getAsJsonObject();
+            // A held-mail notice stands in for an email ZeroDrop didn't store:
+            // never return it, but report it if nothing else matches.
+            if (isHeldNotice(item)) {
+                if (notice == null) {
+                    notice = item;
+                }
+                continue;
+            }
+            Email email = toEmail(item);
             if (filter == null || filter.matches(email)) {
                 return Optional.of(email);
             }
+        }
+        if (notice != null) {
+            throw new ZeroDropException.Held(heldReason(notice));
         }
         return Optional.empty();
     }
@@ -222,6 +238,8 @@ public final class ZeroDrop {
      *
      * @throws ZeroDropException.Timeout if nothing arrives in time
      * @throws ZeroDropException.Auth    when the inbox needs another key; the message says why
+     * @throws ZeroDropException.Held    at once, when ZeroDrop held the email (no key, daily
+     *                                   limit); the message says why
      */
     public Email waitForLatest(String inbox, Duration timeout, Filter filter) {
         Instant deadline = Instant.now().plus(timeout);
@@ -256,6 +274,22 @@ public final class ZeroDrop {
             // not JSON: fall back to the generic message
         }
         return null;
+    }
+
+    // Mail past the keyless daily limit is held: not stored, and listed as a
+    // notice instead. Only the JSON boolean true marks one, not "true".
+    private static boolean isHeldNotice(JsonObject item) {
+        JsonElement held = item.get("held");
+        return held != null && held.isJsonPrimitive()
+            && held.getAsJsonPrimitive().isBoolean() && held.getAsBoolean();
+    }
+
+    // The notice's reason when it's a string; otherwise Held uses its default message.
+    private static String heldReason(JsonObject notice) {
+        JsonElement reason = notice.get("reason");
+        return reason != null && reason.isJsonPrimitive() && reason.getAsJsonPrimitive().isString()
+            ? reason.getAsString().trim()
+            : null;
     }
 
     private Email toEmail(JsonObject raw) {
