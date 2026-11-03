@@ -36,7 +36,7 @@ import java.util.regex.Pattern;
  */
 public final class ZeroDrop {
     /** The SDK version, sent in the User-Agent header. */
-    public static final String VERSION = "0.3.0";
+    public static final String VERSION = "0.4.0";
 
     private static final String DEFAULT_BASE_URL = "https://zerodrop.dev";
     private static final String FREE_DOMAIN = "zerodrop-sandbox.online";
@@ -50,6 +50,12 @@ public final class ZeroDrop {
     // A free key from https://zerodrop.dev/keys: zd_<prefix>_<32 letters/digits>.
     // Inboxes named <prefix>-... can be read only with that key.
     private static final Pattern KEY_FORMAT = Pattern.compile("^zd_([a-z0-9]{4})_[A-Za-z0-9]{32}$");
+    // A Workspace's own domain, from Builder.domain(...) or ZERODROP_DOMAIN.
+    private static final Pattern HOST_NAME = Pattern.compile(
+        "^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$");
+    // Warnings go through the JDK's System.Logger: java.util.logging, unless
+    // your app routes it elsewhere.
+    private static final System.Logger LOGGER = System.getLogger(ZeroDrop.class.getName());
     private static final Pattern PLAIN_TEXT = Pattern.compile(
         "Content-Type: text/plain[^\\r\\n]*\\r\\n\\r\\n(.*?)(?:\\r\\n--|\\r\\n\\r\\n--)",
         Pattern.DOTALL
@@ -57,12 +63,13 @@ public final class ZeroDrop {
 
     private final String apiKey;
     private final String prefix;
+    private final String domain;
     private final String baseUrl;
     private final HttpClient http;
     private final SecureRandom random = new SecureRandom();
     private final Gson gson = new Gson();
 
-    private ZeroDrop(String apiKey, String baseUrl, HttpClient http) {
+    private ZeroDrop(String apiKey, String baseUrl, String domain, HttpClient http) {
         String key = trimKey(apiKey);
         if (key.isEmpty()) {
             key = trimKey(System.getenv("ZERODROP_API_KEY"));
@@ -80,7 +87,14 @@ public final class ZeroDrop {
         this.baseUrl = baseUrl.endsWith("/")
             ? baseUrl.substring(0, baseUrl.length() - 1)
             : baseUrl;
+        this.domain = resolveDomain(domain);
         this.http = http;
+
+        if (!this.domain.equals(FREE_DOMAIN) && this.prefix == null) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                "[ZeroDrop] Inboxes on " + this.domain + " belong to your Workspace and can be read only "
+                    + "with its API key (zd_xxxx_… from https://zerodrop.dev/keys). Set ZERODROP_API_KEY.");
+        }
     }
 
     // Drops whitespace around a key, including the no-break spaces and
@@ -104,13 +118,35 @@ public final class ZeroDrop {
         return ch <= ' ' || Character.isWhitespace(ch) || Character.isSpaceChar(ch) || ch == '\uFEFF';
     }
 
+    // The receiving domain: the builder's, else ZERODROP_DOMAIN, else the
+    // shared one. Trimmed like a key, lowercased, without a trailing dot.
+    private static String resolveDomain(String option) {
+        String value = trimKey(option);
+        if (value.isEmpty()) {
+            value = trimKey(System.getenv("ZERODROP_DOMAIN"));
+        }
+        if (value.isEmpty()) {
+            return FREE_DOMAIN;
+        }
+        String domain = value.toLowerCase(Locale.ROOT);
+        if (domain.endsWith(".")) {
+            domain = domain.substring(0, domain.length() - 1);
+        }
+        if (!HOST_NAME.matcher(domain).matches()) {
+            throw new IllegalArgumentException(
+                "ZeroDrop: the domain (from the builder or ZERODROP_DOMAIN) isn't a domain name. Use your Workspace's domain, such as yourcompany-qa.com.");
+        }
+        return domain;
+    }
+
     /**
      * Create a client. It uses ZERODROP_API_KEY from the environment when set;
      * otherwise it runs in free sandbox mode, where anyone who knows an inbox's
-     * name can read it.
+     * name can read it. ZERODROP_DOMAIN, when set, is your Workspace's domain.
      *
      * @throws IllegalArgumentException if the key holds a character that can't
-     *     be sent in an HTTP header (a line break, a byte-order mark...)
+     *     be sent in an HTTP header (a line break, a byte-order mark...), or
+     *     ZERODROP_DOMAIN isn't a domain name
      */
     public static ZeroDrop create() {
         return builder().build();
@@ -129,6 +165,14 @@ public final class ZeroDrop {
     }
 
     /**
+     * The domain generated addresses use: your Workspace's, or
+     * zerodrop-sandbox.online.
+     */
+    public String domain() {
+        return domain;
+    }
+
+    /**
      * Returns a ready-to-use email address instantly.
      * No network request is made. With a key, the name starts with your
      * prefix: k7x2-swift-x7k29ab@zerodrop-sandbox.online.
@@ -143,7 +187,7 @@ public final class ZeroDrop {
         if (prefix != null) {
             name = prefix + "-" + name;
         }
-        return name + "@" + FREE_DOMAIN;
+        return name + "@" + domain;
     }
 
     /**
@@ -342,15 +386,29 @@ public final class ZeroDrop {
         return "";
     }
 
-    private static String inboxName(String inbox) {
+    // The inbox an address is read from: its local part. On your Workspace's
+    // own domain, mail is filed under your key's prefix, so an address you
+    // named yourself, such as qa@yourcompany-qa.com, is read as k7x2-qa.
+    private String inboxName(String inbox) {
         int at = inbox.indexOf('@');
-        String name = at >= 0 ? inbox.substring(0, at) : inbox;
-        return name.toLowerCase(Locale.ROOT);
+        String name = (at >= 0 ? inbox.substring(0, at) : inbox).toLowerCase(Locale.ROOT);
+        if (at < 0 || prefix == null || domain.equals(FREE_DOMAIN)) {
+            return name;
+        }
+        String host = inbox.substring(inbox.lastIndexOf('@') + 1).toLowerCase(Locale.ROOT);
+        if (host.endsWith(".")) {
+            host = host.substring(0, host.length() - 1);
+        }
+        if (!host.equals(domain) || name.startsWith(prefix + "-")) {
+            return name;
+        }
+        return prefix + "-" + name;
     }
 
     public static final class Builder {
         private String apiKey;
         private String baseUrl = DEFAULT_BASE_URL;
+        private String domain;
         private HttpClient http;
 
         /**
@@ -368,6 +426,17 @@ public final class ZeroDrop {
             return this;
         }
 
+        /**
+         * Your Workspace's own domain, such as "yourcompany-qa.com". Generated
+         * addresses use it, and its inboxes are read with your key. Without it
+         * the client reads ZERODROP_DOMAIN from the environment, then uses the
+         * shared zerodrop-sandbox.online.
+         */
+        public Builder domain(String domain) {
+            this.domain = domain;
+            return this;
+        }
+
         /** Custom HttpClient (proxies, custom timeouts, etc.). */
         public Builder httpClient(HttpClient http) {
             this.http = http;
@@ -378,14 +447,15 @@ public final class ZeroDrop {
          * Builds the client.
          *
          * @throws IllegalArgumentException if the key holds a character that
-         *     can't be sent in an HTTP header (a line break, a byte-order mark...)
+         *     can't be sent in an HTTP header (a line break, a byte-order mark...),
+         *     or the domain isn't a domain name
          */
         public ZeroDrop build() {
             HttpClient client = http != null ? http : HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
-            return new ZeroDrop(apiKey, baseUrl, client);
+            return new ZeroDrop(apiKey, baseUrl, domain, client);
         }
     }
 }

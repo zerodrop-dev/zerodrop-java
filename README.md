@@ -27,7 +27,7 @@ repositories {
 }
 
 dependencies {
-    testImplementation 'com.github.zerodrop-dev:zerodrop-java:v0.3.0'
+    testImplementation 'com.github.zerodrop-dev:zerodrop-java:v0.4.0'
 }
 ```
 
@@ -44,7 +44,7 @@ dependencies {
 <dependency>
     <groupId>com.github.zerodrop-dev</groupId>
     <artifactId>zerodrop-java</artifactId>
-    <version>v0.3.0</version>
+    <version>v0.4.0</version>
     <scope>test</scope>
 </dependency>
 ```
@@ -181,6 +181,22 @@ Reading a `k7x2-…` inbox without your key throws `ZeroDropException.Auth` with
 
 Without a key, if ZeroDrop held an email because its sender passed the daily limit, the inbox gets a notice instead, and `fetchLatest` and `waitForLatest` throw `ZeroDropException.Held` saying so (v0.3.0 or later; older versions return the notice as if it were the email, or time out when a filter skips it). A free key from [zerodrop.dev/keys](https://zerodrop.dev/keys) avoids the limit.
 
+## Workspace Domain
+
+A Workspace receives mail on a domain of its own, such as `yourcompany-qa.com`, so sign-up forms that block disposable domains accept it. Every inbox on it can be read only with your key. Set the domain as `ZERODROP_DOMAIN`, which `ZeroDrop.create()` reads like your key, or pass it to the builder next to your key:
+
+```java
+ZeroDrop mail = ZeroDrop.builder()
+    .apiKey(System.getenv("ZERODROP_API_KEY"))
+    .domain("yourcompany-qa.com")
+    .build();
+String inbox = mail.generateInbox();
+// "k7x2-swift-x7k29ab@yourcompany-qa.com"
+Email email = mail.waitForLatest(inbox, Duration.ofSeconds(15));
+```
+
+Any address on the domain works, including one you name yourself: mail to `qa@yourcompany-qa.com` is filed under your prefix, and `mail.waitForLatest("qa@yourcompany-qa.com")` reads it from there. `mail.domain()` returns the domain in use. A value that isn't a domain name makes `ZeroDrop.create()` and `build()` throw `IllegalArgumentException`. Workspaces are set up with the founder: [zerodrop.dev/pricing](https://zerodrop.dev/pricing).
+
 ## Parallel test runs
 
 `generateInbox()` runs locally — no network request, no collisions. Safe with JUnit parallel execution and TestNG parallel suites; every call returns a unique isolated inbox. Mail to many inboxes a day needs a free API key: without one, one sender can reach only 5 different inboxes a day.
@@ -208,6 +224,7 @@ try {
 ```java
 ZeroDrop mail = ZeroDrop.builder()
     .apiKey(System.getenv("ZERODROP_API_KEY"))
+    .domain("yourcompany-qa.com") // your Workspace's own domain, if it has one
     .build();
 ```
 
@@ -224,9 +241,10 @@ ZeroDrop mail = ZeroDrop.builder()
 | Method | Description |
 |---|---|
 | `ZeroDrop.create()` | Client using `ZERODROP_API_KEY` when set; otherwise free sandbox mode, where inboxes are public to anyone who knows the name. |
-| `ZeroDrop.builder()` | Configure apiKey / baseUrl / httpClient. |
+| `ZeroDrop.builder()` | Configure apiKey / baseUrl / domain / httpClient. |
 | `generateInbox()` | Instant inbox address. No network request. With a key, the name starts with your prefix. |
 | `prefix()` | `Optional<String>` — your key's inbox prefix (`"k7x2"`), empty without a key. |
+| `domain()` | The domain generated addresses use: your Workspace's (`.domain(...)` or `ZERODROP_DOMAIN`), or `zerodrop-sandbox.online`. |
 | `fetchLatest(inbox, filter)` | `Optional<Email>` — latest matching email. |
 | `waitForLatest(inbox, timeout, filter)` | Block until email arrives. |
 
@@ -238,8 +256,8 @@ ZeroDrop mail = ZeroDrop.builder()
 | OTP auto-extraction | ✓ | ✓ |
 | Magic link extraction | ✓ | ✓ |
 | Email filtering | ✓ | ✓ |
-| Email retention | 30 min | Extended |
-| Custom domains | ✗ | ✓ |
+| Email retention | 30 min | Up to 7 days, set for your team |
+| Custom domains | ✗ | ✓ (see [Workspace Domain](#workspace-domain)) |
 | API key | ✓ free at [zerodrop.dev/keys](https://zerodrop.dev/keys) | ✓ |
 | Daily limit per sender | 5 inboxes without a key, none with one | None |
 
